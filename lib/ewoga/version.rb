@@ -1,0 +1,3 @@
+module Ewoga
+  VERSION = "0.1.0"
+end
