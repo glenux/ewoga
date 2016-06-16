@@ -1,0 +1,328 @@
+#!/usr/bin/env ruby
+
+require 'pathname'
+require 'fileutils'
+require 'colorize'
+
+ROOTDIR=Pathname.new(__FILE__).dirname.parent.realpath.to_s
+DATADIR=(Pathname.new(ROOTDIR) + 'extract').to_s
+
+# puts "ROOTDIR = #{ROOTDIR}"
+# puts "DATA = #{DATADIR}"
+
+$INDENT = 2
+def indent 
+  " " * $INDENT
+end
+
+class Project 
+  def initialize path
+    @path = path
+    @name = File.basename path
+    @score = 0
+    @score_max = 0
+  end
+
+  class ExtractionError < Exception ; end
+
+  def extract 
+    Dir.chdir(@path)
+    print indent + "Extracting project data ... "
+
+    tarfile = @path + '/projet.tar'
+    system "tar xavf #{tarfile} > extractlog"
+    raise ExtractionError unless $?.success?
+    puts "success".green
+
+    dir = %x{head -n1 extractlog}.strip
+    if dir != 'taskman/' then
+      FileUtils.rm_rf 'taskman'
+      FileUtils.mv dir, 'taskman'
+    end
+    FileUtils.rm 'extractlog'
+    puts ""
+  end
+
+  def patch
+    Dir.chdir(@path)
+    print indent + "Patching project data ... "
+    $INDENT += 2
+    if File.exist? 'patch.d' then 
+      log = []
+      Dir.glob('patch.d/*.patch').sort.each do |patchfile|
+        patchname = File.basename(patchfile).gsub(/\.patch$/,'')
+        IO.popen("patch -p0 < #{patchfile}") do |fh|
+          log.concat fh.readlines.map(&:strip).map { |line| 
+            patchname + ': ' + line 
+          }
+        end
+      end
+      puts "success".green
+      puts log.map {|line| indent + line }
+    else 
+      puts 'skipping'
+    end
+    $INDENT -= 2
+    puts ""
+  end
+
+  def test_structure
+    score = 0
+    score_max = 0
+    errors = []
+    ['bin', 'lib', 'lib/taskman'].each do |dir|
+      score_max += 2
+      if File.exist? dir then score += 1 
+      else errors << "Missing directory #{dir}"
+      end
+
+      if File.directory? dir then score +=1
+      else errors << "#{dir} must be a directory"
+      end
+    end
+
+    ['Gemfile', 'bin/taskman', 'lib/taskman.rb'].each do |file|
+      score_max += 1
+      if File.exist? file then score += 1 
+      else errors << "Missing file #{file}"
+      end
+    end
+
+    log = IO.popen('find').readlines
+    .map{|line| line.strip }
+    .reject do |line|
+      # hide some files we're not interested in
+      case line.strip
+      when /\/ruby\/2\.3\.0\// then true
+      when /.swp/ then true
+      when /^\.$/ then true
+      when /~$/ then true
+      else false
+      end
+    end
+    .map{ |line| line.strip[2..-1] }
+
+    { log: log, 
+      score: score,
+      score_max: score_max,
+      errors: errors 
+    }
+  end
+
+
+  def test_bundle_install
+    res = { log: [], errors: [], score: 0, score_max: 0 }
+
+    if File.exist? 'Gemfile' then
+      IO.popen('bundle install --path vendor/bundler') do |fh|
+        res[:log].concat fh.readlines.map(&:strip)
+      end
+      res[:score] += 1 if $?.success?
+      res[:score_max] += 1
+    end
+
+    res
+  end
+
+
+  def test_taskman_help
+    res = { log: [], errors: [], score: 0, score_max: 0 }
+
+    command = bundle_prefix + './bin/taskman -h 2>&1'
+    res[:log] << "Running command: #{command}"
+    IO.popen(command) do |fh|
+      res[:log].concat fh.readlines.map(&:strip)
+    end
+
+    no_error = res[:log].select{|line| line =~ /ERROR/i or line =~ /Erreur/i }.empty?
+    res[:score] += 1 if $?.success? and no_error
+    res[:score_max] += 1
+
+    res
+  end
+
+  # help (-h)
+  def test_taskman_help_short
+    res = { log: [], errors: [], score: 0, score_max: 0 }
+
+    command = bundle_prefix + './bin/taskman -h 2>&1'
+    res[:log] << "Running command: #{command}"
+    IO.popen(command) do |fh|
+      res[:log].concat fh.readlines.map(&:strip)
+    end
+
+    no_error = res[:log].select{|line| line =~ /ERROR/i or line =~ /Erreur/i }.empty?
+    res[:score] += 1 if $?.success? and no_error
+    res[:score_max] += 1
+    res
+  end
+
+
+  # help long (--help)
+  def test_taskman_help_long
+    res = { log: [], errors: [], score: 0, score_max: 0 }
+
+    command = bundle_prefix + './bin/taskman --help 2>&1'
+    res[:log] << "Running command: #{command}"
+    IO.popen(command) do |fh|
+      res[:log].concat fh.readlines.map(&:strip)
+    end
+
+    no_error = res[:log].select{|line| line =~ /ERROR/i or line =~ /Erreur/i }.empty?
+    res[:score] += 1 if $?.success? and no_error
+    res[:score_max] += 1
+    res
+  end
+
+  # wrong command
+  def test_taskman_command_wrong
+    res = { log: [], errors: [], score: 0, score_max: 0 }
+
+    command = bundle_prefix + './bin/taskman wrong-command 2>&1'
+    res[:log] << "Running command: #{command}"
+    IO.popen(command) do |fh|
+      res[:log].concat fh.readlines.map(&:strip)
+    end
+
+    no_error = res[:log].select{|line| line =~ /ERROR/i or line =~ /Erreur/i }.empty?
+    res[:score] += 1 if not $?.success? and not no_error
+    res[:score_max] += 1
+
+    res
+  end
+
+  def test_taskman_command_list
+    res = { log: [], errors: [], score: 0, score_max: 0 }
+
+    command = bundle_prefix + './bin/taskman list 2>&1'
+    res[:log] << "Running command: #{command}"
+    IO.popen(command) do |fh|
+      res[:log].concat fh.readlines.map(&:strip)
+    end
+    no_error = res[:log].select{|line| line =~ /ERROR/i or line =~ /Erreur/i }.empty?
+    res[:score] += 1 if $?.success? and no_error
+    res[:score_max] += 1
+
+    res
+  end
+
+  def test_taskman_command_add
+    res = { log: [], errors: [], score: 0, score_max: 0 }
+
+    command = bundle_prefix + './bin/taskman list 2>&1'
+    before = []
+    IO.popen(command) do |fh|
+      before.concat fh.readlines.map(&:strip)
+    end
+
+    command = bundle_prefix + './bin/taskman add "Tester taskman 1" 2>&1'
+    res[:log] << "Running command: #{command}"
+    IO.popen(command) do |fh|
+      res[:log].concat fh.readlines.map(&:strip)
+    end
+    no_error = res[:log].select{|line| line =~ /ERROR/i or line =~ /Erreur/i }.empty?
+    res[:score] += 1 if $?.success? and no_error
+    res[:score_max] += 1
+
+    command = bundle_prefix + './bin/taskman list 2>&1'
+    after = []
+    IO.popen(command) do |fh|
+      after.concat fh.readlines.map(&:strip)
+    end
+
+    res
+  end
+
+  def test_taskman_command_del
+    res = { log: [], errors: [], score: 0, score_max: 0 }
+
+    res
+  end
+
+  def test_taskman_command_mod
+    res = { log: [], errors: [], score: 0, score_max: 0 }
+
+    res
+  end
+
+  def test name, desc
+    print indent + desc + " ... "
+    prev_INDENT = $INDENT
+    $INDENT += 2
+    @score_max += 1
+    Dir.chdir(@path + '/taskman')
+    res = self.send(('test_' + name.to_s).to_sym)
+
+    if res[:score_max] == 0 then
+      puts "skipping"
+      puts ""
+    else
+      success = res[:score].to_f / res[:score_max].to_f
+      success_pcent = (success * 100).to_i
+      if success == 1.0 then 
+        # success case
+        puts ("%d%% success" % success_pcent).green
+      elsif success > 0.5 then
+        puts ("%d%% error" % success_pcent).yellow
+      else
+        puts ("%d%% error" % success_pcent).red
+      end
+      @score += res[:score]
+      @score_max += res[:score_max]
+    end
+
+    unless res[:log].empty? then
+      puts res[:log].map{|line| indent + line }.join("\n")
+      puts ""
+    end
+    unless res[:errors].empty? then
+      puts res[:errors].map{|line| indent + line.red }.join("\n")
+      puts ""
+    end
+
+  ensure
+    $INDENT = prev_INDENT
+  end
+
+  def score
+    puts indent + "[ #{@score} / #{@score_max} ]"
+  end
+
+  private 
+
+  def bundle_prefix
+    prefix = ''
+    prefix = 'bundle exec ' if File.exist? 'Gemfile'
+    prefix
+  end
+end
+
+projects = []
+if ARGV.empty? then
+  projects = Dir.glob(DATADIR + '/*')
+else
+  projects = ARGV
+end
+
+projects.each do |name|
+  projectpath = Pathname.new(name).realpath.to_s
+  puts "[#{File.basename(projectpath).yellow.on_blue}] #{projectpath}"
+
+  project = Project.new(projectpath)
+  project.extract
+  project.patch
+  project.test :structure, "Testing project structure"
+  project.test :bundle_install, "Installing bundled Gems"
+  project.test :taskman_help_short, "Testing taskman short help"
+  project.test :taskman_help_long, "Testing taskman long help"
+  project.test :taskman_command_wrong, "Testing taskman wrong command"
+  project.test :taskman_command_list, "Testing taskman command: list"
+  project.test :taskman_command_add, "Testing taskman command: add"
+  project.test :taskman_command_del, "Testing taskman command: del"
+  project.test :taskman_command_mod, "Testing taskman command: mod"
+  project.score
+  puts ""
+end
+
+exit 0
+

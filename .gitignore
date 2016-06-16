@@ -9,3 +9,4 @@ vendor/bundle*
 /pkg/
 /spec/reports/
 /tmp/
+/extract
