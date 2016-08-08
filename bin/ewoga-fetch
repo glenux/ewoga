@@ -68,7 +68,7 @@ module Ewoga
       m = Mail.read_from_string message.attr[@saved_key]
       return if m.from.nil?
       return if m.to.nil?
-      return unless m.subject =~ /RUBY\s+NEXTFORMATION/
+      return unless m.subject =~ Regexp.new(@config[:match])
 
       begin
         puts "\n### #{m.subject}"
@@ -76,7 +76,7 @@ module Ewoga
         print "#{m.from.first} --> #{m.to.join(',')} "
 
         attach = m.attachments.first 
-        fn = "extract/%s/projet.tar" % [m.from.first, attach.filename]
+        fn = "%s/%s/projet-%s.tar" % [@config[:output], m.from.first, m.date.to_date.to_s]
         puts "- #{fn}"
         begin
           FileUtils.mkdir_p File.dirname(fn)
@@ -122,14 +122,17 @@ module Ewoga
     default_task :crawl
 
 
+    option :match, required: true
+    option :output, required: true
     desc 'crawl', 'Crawls email to save mails'
     def crawl
       #saved_info = []
       parse_configuration
+      @config['match'] = options[:match]
+      @config['output'] = options[:match]
 
       ## Run application
       app = CrawlerApp.new @config
-
       app.connect!
       app.examine_all
       app.disconnect!
