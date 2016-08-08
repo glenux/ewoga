@@ -45,6 +45,8 @@ module Ewoga
       @filter_headers = 'BODY[HEADER.FIELDS (FROM TO Subject)]'.upcase
       @config = config
       @imap = nil
+      puts @config.inspect
+      @match_re = Regexp.new(@config[:match])
     end
 
 
@@ -68,7 +70,7 @@ module Ewoga
       m = Mail.read_from_string message.attr[@saved_key]
       return if m.from.nil?
       return if m.to.nil?
-      return unless m.subject =~ Regexp.new(@config[:match])
+      return unless m.subject =~ @match_re 
 
       begin
         puts "\n### #{m.subject}"
@@ -128,8 +130,8 @@ module Ewoga
     def crawl
       #saved_info = []
       parse_configuration
-      @config['match'] = options[:match]
-      @config['output'] = options[:match]
+      @config[:match] = options[:match]
+      @config[:output] = options[:output]
 
       ## Run application
       app = CrawlerApp.new @config
@@ -194,5 +196,6 @@ rescue SystemExit => e
   raise e
 rescue Exception => e
   puts "ERROR: #{e.class} #{e}"
+  puts e.backtrace
   exit 1
 end
